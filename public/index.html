@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>生日礼金 · 支付宝网页收款演示</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: #fbf1e6;
+    color: #4a3728; font: 16px/1.7 "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  main { max-width: 520px; margin: 0 auto; padding: 48px 20px 64px; }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: .02em; }
+  .sub { margin: 0 0 28px; color: #8a6f58; font-size: 14px; }
+  .card { background: #fffaf3; border: 1px solid #efdcc4; border-radius: 16px; padding: 20px; box-shadow: 0 10px 30px rgba(122, 88, 47, .08); }
+  label { display: block; font-size: 13px; color: #8a6f58; margin: 14px 0 6px; }
+  input { width: 100%; padding: 11px 12px; font: inherit; color: inherit; background: #fff; border: 1px solid #e4cdb2; border-radius: 10px; }
+  input:focus { outline: 2px solid #d9a15b; outline-offset: 1px; }
+  button { font: inherit; cursor: pointer; border: 0; border-radius: 10px; padding: 11px 16px; background: #c8873f; color: #fff; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost { background: transparent; color: #8a5a26; border: 1px solid #d9b98f; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+  .row.primary button { flex: 1; }
+  .status { margin-top: 22px; font-size: 14px; color: #6f5741; min-height: 24px; }
+  .order { margin-top: 26px; }
+  .order h2 { font-size: 15px; margin: 0 0 10px; color: #6f5741; font-weight: 600; }
+  .kv { font-size: 13px; color: #7c6350; display: grid; grid-template-columns: 84px 1fr; gap: 4px 10px; }
+  .kv b { font-weight: 600; color: #4a3728; word-break: break-all; }
+  .divider { height: 1px; background: #efdcc4; margin: 18px 0; }
+  .note { margin-top: 26px; font-size: 12px; color: #a08a75; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>生日礼金</h1>
+  <p class="sub">用支付宝网页收款收下一份心意（沙箱演示）</p>
+
+  <section class="card">
+    <label for="subject">礼物名义</label>
+    <input id="subject" value="生日礼金" maxlength="256" autocomplete="off">
+    <label for="amount">金额（元）</label>
+    <input id="amount" value="0.01" inputmode="decimal" autocomplete="off">
+    <div class="row primary">
+      <button id="pay" type="button">用支付宝支付</button>
+    </div>
+    <p class="status" id="status" role="status" aria-live="polite"></p>
+  </section>
+
+  <section class="order hidden" id="orderCard">
+    <h2>当前订单</h2>
+    <div class="kv">
+      <span>订单号</span><b id="oNo"></b>
+      <span>金额</span><b id="oAmount"></b>
+      <span>状态</span><b id="oState"></b>
+      <span>支付宝交易号</span><b id="oTradeNo">—</b>
+    </div>
+    <div class="divider"></div>
+    <label for="refundAmount">退款金额（元）</label>
+    <input id="refundAmount" placeholder="留空则默认订单金额" inputmode="decimal" autocomplete="off">
+    <div class="row">
+      <button class="ghost" id="query" type="button">查询支付结果</button>
+      <button class="ghost" id="close" type="button">关闭订单</button>
+      <button class="ghost" id="refund" type="button">发起退款</button>
+      <button class="ghost" id="refundQuery" type="button">查询退款</button>
+    </div>
+  </section>
+
+  <p class="note">本页仅用于沙箱联调，未配置生产参数；支付成功以服务端验签通知或交易查询结果为准。</p>
+  <div id="formHost" aria-hidden="true"></div>
+</main>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var current = null;
+  var lastOutRequestNo = null;
+
+  function setStatus(text) { $('status').textContent = text || ''; }
+
+  function renderOrder(order) {
+    if (!order) return;
+    current = order;
+    $('orderCard').classList.remove('hidden');
+    $('oNo').textContent = order.outTradeNo;
+    $('oAmount').textContent = order.totalAmount + ' 元';
+    $('oState').textContent = order.status;
+    $('oTradeNo').textContent = order.tradeNo || '—';
+    if (order.refunds && order.refunds.length) {
+      var latest = order.refunds[order.refunds.length - 1];
+      lastOutRequestNo = latest.outRequestNo;
+    }
+  }
+
+  async function api(path, options) {
+    var response = await fetch(path, options || {});
+    var data = await response.json().catch(function () { return {}; });
+    if (!response.ok) throw new Error(data.error || ('请求失败（' + response.status + '）'));
+    return data;
+  }
+
+  $('pay').addEventListener('click', async function () {
+    var button = $('pay');
+    button.disabled = true;
+    setStatus('正在创建订单…');
+    try {
+      var data = await api('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subject: $('subject').value, amount: $('amount').value })
+      });
+      renderOrder({ outTradeNo: data.outTradeNo, totalAmount: data.totalAmount, status: 'CREATED', tradeNo: null, refunds: [] });
+      setStatus('正在跳转支付宝…');
+      var host = $('formHost');
+      host.innerHTML = data.paymentHtml;
+      var form = host.querySelector('form');
+      if (form) form.submit();
+      else setStatus('支付表单生成失败，请重试。');
+    } catch (error) {
+      setStatus(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  $('query').addEventListener('click', async function () {
+    if (!current) return;
+    setStatus('正在查询…');
+    try {
+      var data = await api('/api/orders/' + encodeURIComponent(current.outTradeNo) + '/query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      renderOrder(data.order);
+      setStatus('查询完成：' + data.localState);
+    } catch (error) { setStatus(error.message); }
+  });
+
+  $('close').addEventListener('click', async function () {
+    if (!current) return;
+    setStatus('正在关闭…');
+    try {
+      var data = await api('/api/orders/' + encodeURIComponent(current.outTradeNo) + '/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      renderOrder(data.order);
+      setStatus('订单已关闭。');
+    } catch (error) { setStatus(error.message); }
+  });
+
+  $('refund').addEventListener('click', async function () {
+    if (!current) return;
+    var amount = $('refundAmount').value.trim() || current.totalAmount;
+    setStatus('正在发起退款…');
+    try {
+      var data = await api('/api/orders/' + encodeURIComponent(current.outTradeNo) + '/refund', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(lastOutRequestNo ? { amount: amount, outRequestNo: lastOutRequestNo } : { amount: amount })
+      });
+      renderOrder(data.order);
+      lastOutRequestNo = data.refund.outRequestNo;
+      setStatus('退款状态：' + data.refund.status);
+    } catch (error) { setStatus(error.message); }
+  });
+
+  $('refundQuery').addEventListener('click', async function () {
+    if (!current || !lastOutRequestNo) { setStatus('请先发起退款。'); return; }
+    setStatus('正在查询退款…');
+    try {
+      var data = await api('/api/orders/' + encodeURIComponent(current.outTradeNo) + '/refund-query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ outRequestNo: lastOutRequestNo })
+      });
+      setStatus('退款查询：' + (data.refundStatus || '未确认') + '，本地状态 ' + data.refund.status);
+    } catch (error) { setStatus(error.message); }
+  });
+})();
+</script>
+</body>
+</html>
