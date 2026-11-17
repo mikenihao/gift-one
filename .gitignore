@@ -1,0 +1,4 @@
+node_modules/
+/.alipay-sandbox.json
+data/
+.env
